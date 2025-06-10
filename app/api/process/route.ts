@@ -139,7 +139,7 @@ export async function POST(request: NextRequest) {
       if (processingError instanceof Error) {
         errorMessage = (processingError as Error).message;
       } else if (typeof processingError === 'string') {
-        errorMessage = processingError;
+        errorMessage = processingError as string;
       } else {
         errorMessage = 'Неизвестная ошибка';
       }
