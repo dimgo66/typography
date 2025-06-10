@@ -135,14 +135,16 @@ export async function POST(request: NextRequest) {
 
     } catch (processingError: unknown) {
       console.error('ОШИБКА ОБРАБОТКИ:', processingError);
+      let errorMessage: string;
+      if (processingError instanceof Error) {
+        errorMessage = processingError.message;
+      } else if (typeof processingError === 'string') {
+        errorMessage = processingError;
+      } else {
+        errorMessage = 'Неизвестная ошибка';
+      }
       return NextResponse.json({ 
-        error: `Ошибка типографской обработки: ${
-          processingError instanceof Error
-            ? processingError.message
-            : typeof processingError === 'string'
-              ? processingError
-              : 'Неизвестная ошибка'
-        }` 
+        error: `Ошибка типографской обработки: ${errorMessage}` 
       }, { status: 500 });
     }
 
