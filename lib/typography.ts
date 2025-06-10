@@ -153,8 +153,8 @@ export class AdvancedTypographyProcessor {
 
     // 1. Множественные пробелы (заменяем любые последовательности пробельных символов, кроме \n, на один пробел)
     result = result.replace(/[ \t\v\f\r]{2,}/g, ' ');
-    // 1a. Убираем пробелы в начале и конце строк (но не трогаем внутренние пробелы между словами)
-    result = result.split('\n').map(line => line.replace(/^\s+|\s+$/g, '')).join('\n');
+    // 1a. Убираем пробелы в начале и конце каждой строки (но не трогаем внутренние пробелы между словами)
+    result = result.replace(/^[ \t]+|[ \t]+$/gm, '');
 
     // 1b. Между знаком № и цифрой всегда неразрывный пробел
     result = result.replace(/№\s*(\d+)/g, '№\u00A0$1');
@@ -204,7 +204,11 @@ export class AdvancedTypographyProcessor {
     result = result.replace(/\s+(-|—)\s+/g, '\u00A0— ');
 
     // 8. Между словами (буква-пробел-дефис-пробел-буква)
+    // После тире всегда пробел
     result = result.replace(/(\p{L})\s*-\s*(\p{L})/gu, '$1 — $2');
+    // После em dash/en dash между словами — всегда пробел
+    result = result.replace(/—(\S)/g, '— $1');
+    result = result.replace(/–(\S)/g, '– $1');
 
     // 9. В начале строки (диалоги)
     result = result.replace(/(^|\n)-\s/gu, '$1— ');
@@ -232,6 +236,9 @@ export class AdvancedTypographyProcessor {
     // 14. Пробелы в скобках
     result = result.replace(/\(\s+/g, '(');
     result = result.replace(/\s+\)/g, ')');
+
+    // В самом конце: нормализуем двойные пробелы до одного
+    result = result.replace(/ {2,}/g, ' ');
 
     return result;
   }
