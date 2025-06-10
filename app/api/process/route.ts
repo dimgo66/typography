@@ -137,7 +137,7 @@ export async function POST(request: NextRequest) {
       console.error('ОШИБКА ОБРАБОТКИ:', processingError);
       let errorMessage: string;
       if (processingError instanceof Error) {
-        errorMessage = processingError.message;
+        errorMessage = (processingError as Error).message;
       } else if (typeof processingError === 'string') {
         errorMessage = processingError;
       } else {
