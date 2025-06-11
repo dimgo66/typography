@@ -238,15 +238,80 @@ function escapeXml(unsafe: string): string {
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
 }
 
+// Вспомогательная функция: разбить текст на слова и пробелы
+function splitByWordsAndSpaces(text: string): string[] {
+  return text.match(/\S+|\s+/g) || [];
+}
+
+// Функция агрессивной очистки пробелов и спецсимволов
+function cleanTypographySpaces(text: string): string {
+  return text
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^\s+|\s+$/gm, '')
+    .replace(/\s+([.,!?;:»])/g, '$1')
+    .replace(/([«(])\s+/g, '$1')
+    .replace(/\u00A0\s+/g, '\u00A0')
+    .replace(/\s+\u00A0/g, '\u00A0')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '') // невидимые символы
+    .replace(/^\s+|\s+$/g, '');
+}
+
 // Вспомогательная функция: обработка XML Word (document.xml, footnotes.xml)
 function processDocxXml(xml: string): string {
-  // Заменяем только содержимое <w:t>...</w:t>
-  return xml.replace(/(<w:t[^>]*>)([\s\S]*?)(<\/w:t>)/g, (match, open, text, close) => {
-    // Если внутри <w:t> есть XML-теги — не трогаем этот узел
-    if (/<[a-z][\s\S]*>/i.test(text)) {
-      return match;
+  // Для каждого абзаца <w:p>...
+  return xml.replace(/(<w:p[\s\S]*?<\/w:p>)/g, (pBlock) => {
+    const tMatches = [...pBlock.matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)];
+    if (tMatches.length === 0) return pBlock;
+    const originalTexts = tMatches.map(m => m[1]);
+    const fullText = originalTexts.join('');
+    // Применяем типографику и очистку только к склеенному тексту
+    const processedRaw = AdvancedTypographyProcessor.process(fullText);
+    let processed = cleanTypographySpaces(processedRaw);
+    processed = escapeXml(processed);
+
+    // Если длина совпадает — простое разбиение
+    if (fullText.length === processed.length) {
+      let cursor = 0;
+      const processedChunks = originalTexts.map(orig => {
+        const chunk = processed.slice(cursor, cursor + orig.length);
+        cursor += orig.length;
+        return chunk; // не применяем очистку!
+      });
+      let i = 0;
+      return pBlock.replace(/<w:t[^>]*>[\s\S]*?<\/w:t>/g, (tTag) => tTag.replace(/>.*?</, '>' + processedChunks[i++] + '<'));
     }
-    const processed = escapeXml(AdvancedTypographyProcessor.process(text));
-    return open + processed + close;
+    // Иначе — разбиваем по словам и пробелам
+    const origChunks = splitByWordsAndSpaces(fullText);
+    const procChunks = splitByWordsAndSpaces(processed);
+    if (origChunks.length === procChunks.length) {
+      // Распределяем по <w:t>
+      let i = 0, j = 0;
+      const newTexts = [];
+      for (const orig of originalTexts) {
+        let chunk = '';
+        let len = orig.length;
+        while (len > 0 && j < procChunks.length) {
+          const part = procChunks[j];
+          if (part.length <= len) {
+            chunk += part;
+            len -= part.length;
+            j++;
+          } else {
+            chunk += part.slice(0, len);
+            procChunks[j] = part.slice(len);
+            len = 0;
+          }
+        }
+        newTexts.push(chunk); // не применяем очистку!
+      }
+      let k = 0;
+      return pBlock.replace(/<w:t[^>]*>[\s\S]*?<\/w:t>/g, (tTag) => tTag.replace(/>.*?</, '>' + newTexts[k++] + '<'));
+    } else {
+      // Не удалось — оставляем исходный текст
+      console.warn('[processDocxXml] Не удалось безопасно разбить обработанный текст по <w:t>', {
+        origLen: fullText.length, procLen: processed.length, originalTexts, processed
+      });
+      return pBlock;
+    }
   });
 }
