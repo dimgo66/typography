@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { TypographyProcessor } from '@/lib/typography';
 
 export default function Home() {
@@ -9,6 +9,14 @@ export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [message, setMessage] = useState('');
+  const [stars, setStars] = useState<number | null>(null);
+
+  useEffect(() => {
+    fetch('https://api.github.com/repos/dimgo66/typography')
+      .then(r => r.json())
+      .then(d => setStars(d.stargazers_count))
+      .catch(() => setStars(null));
+  }, []);
 
   const handleTextProcess = () => {
     if (!text.trim()) {
@@ -367,10 +375,9 @@ export default function Home() {
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 px-2 py-1 bg-yellow-100 rounded hover:bg-yellow-200 text-yellow-800"
           >
-            ★ <span id="github-stars">Загрузка...</span>
+            ★ {stars === null ? 'Загрузка...' : stars}
           </a>
         </div>
-        <script dangerouslySetInnerHTML={{__html:`fetch('https://api.github.com/repos/dimgo66/typography').then(r=>r.json()).then(d=>{const s=document.getElementById('github-stars');if(s)s.textContent=d.stargazers_count})`}} />
       </footer>
     </div>
   );
