@@ -5,7 +5,7 @@ export const metadata = {
   description: 'Обработка русского текста по правилам типографики',
   keywords: 'типографика, обработка текста, русский текст, docx, word, поэзия, неразрывные пробелы, тире, онлайн, Дмитрий Горяченков',
   url: 'https://typography.vercel.app/',
-  image: '/favicon.svg',
+  image: '/og-image.png',
   author: 'Дмитрий Горяченков',
 };
 
