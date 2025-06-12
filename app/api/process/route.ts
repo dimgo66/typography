@@ -153,7 +153,7 @@ function htmlToDocxParagraphs(html: string): Paragraph[] {
         $(elem).find('li').each((_, li) => {
           const runs = parseRuns($, $(li));
           if (runs.length) {
-            paragraphs.push(new Paragraph({ children: runs, bullet: elem.tagName === 'ul' }));
+            paragraphs.push(new Paragraph({ children: runs, bullet: elem.tagName === 'ul' ? { level: 0 } : undefined }));
             prevWasBlock = true;
           }
         });
