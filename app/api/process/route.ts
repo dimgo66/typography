@@ -26,7 +26,7 @@ function transliterate(str: string): string {
   return str.split('').map(char => map[char] !== undefined ? map[char] : char).join('');
 }
 
-function parseRuns($: cheerio.CheerioAPI, $elem: cheerio.Cheerio, parentStyle: any = {}): TextRun[] {
+function parseRuns($: cheerio.CheerioAPI, $elem: cheerio.Cheerio<any>, parentStyle: any = {}): TextRun[] {
   const runs: TextRun[] = [];
   $elem.contents().each((_, node) => {
     let style = { ...parentStyle };
