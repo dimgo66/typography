@@ -219,12 +219,6 @@ export default function Home() {
                 >
                   ✨ Обработать
                 </button>
-                <button
-                  onClick={loadExample}
-                  className="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
-                >
-                  📋 Пример
-                </button>
               </div>
 
               {processedText && (
@@ -259,12 +253,12 @@ export default function Home() {
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Выберите файл:
                 </label>
-                <p className="text-xs text-gray-500 mb-2">
-                  Поддерживаются: .txt, .docx, .doc • Сохраняется форматирование и структура стихов
-                </p>
+                <div className="mb-2 text-gray-700 text-sm">
+                  Поддерживается только <b>.docx</b> (Microsoft Word). Форматирование и сноски сохраняются.
+                </div>
                 <input
                   type="file"
-                  accept=".txt,.docx,.doc"
+                  accept=".docx"
                   onChange={handleFileUpload}
                   className="w-full p-3 border border-gray-300 rounded-lg file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
                 />
@@ -277,12 +271,6 @@ export default function Home() {
                   className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
                 >
                   {isProcessing ? '⏳ Обработка...' : '🚀 Обработать файл'}
-                </button>
-                <button
-                  onClick={downloadDemo}
-                  className="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
-                >
-                  📥 Демо с поэзией
                 </button>
               </div>
 

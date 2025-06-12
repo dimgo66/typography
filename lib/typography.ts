@@ -1,3 +1,5 @@
+import * as cheerio from 'cheerio';
+
 // Расширенная типографская обработка с сохранением форматирования
 export interface FormattedText {
   text: string;
@@ -113,6 +115,9 @@ export class AdvancedTypographyProcessor {
     result = this.applyNonBreakingSpaces(result);
     result = this.applyPunctuation(result);
     
+    // Удаляем все пустые строки в конце текста
+    result = result.replace(/(\r?\n)+$/g, '');
+
     return result;
   }
 
@@ -150,6 +155,9 @@ export class AdvancedTypographyProcessor {
    */
   private static applyBasicRules(text: string): string {
     let result = text;
+
+    // 0. Защита от слипания слов: временно заменяем > < на >\u200B< (невидимый разделитель)
+    result = result.replace(/>\s+</g, '>\u200B<');
 
     // 1. Множественные пробелы (заменяем любые последовательности пробельных символов, кроме \n, на один пробел)
     result = result.replace(/[ \t\v\f\r]{2,}/g, ' ');
@@ -191,8 +199,10 @@ export class AdvancedTypographyProcessor {
       .replace(/\bт\.-о\./gi, '[[T_O]]')
       .replace(/\bи\ т\.-д\./gi, '[[I_T_D]]');
 
-    // 5. Диапазон чисел: 1966-1977 → 1966–1977 (en dash)
-    result = result.replace(/(\d{1,4})-(\d{1,4})/g, '$1–$2');
+    // 5. Диапазон чисел: 1966-1977 → 1966–1977 (en dash), без пробелов вокруг
+    result = result.replace(/(\d{1,4})\s*-\s*(\d{1,4})/g, '$1–$2');
+    // 5a. Удаляем пробелы вокруг en dash между числами (2020 - 2021 → 2020–2021)
+    result = result.replace(/(\d{1,4})\s*–\s*(\d{1,4})/g, '$1–$2');
 
     // 6. en dash между словами или с пробелами → em dash с неразрывным пробелом
     // (\s|^)–(\s) → \u00A0— 
@@ -206,9 +216,9 @@ export class AdvancedTypographyProcessor {
     // 8. Между словами (буква-пробел-дефис-пробел-буква)
     // После тире всегда пробел
     result = result.replace(/(\p{L})\s*-\s*(\p{L})/gu, '$1 — $2');
-    // После em dash/en dash между словами — всегда пробел
-    result = result.replace(/—(\S)/g, '— $1');
-    result = result.replace(/–(\S)/g, '– $1');
+    // После em dash/en dash между словами — всегда пробел, КРОМЕ диапазонов чисел
+    result = result.replace(/—(?!\d)(\S)/g, '— $1');
+    result = result.replace(/–(?!\d)(\S)/g, '– $1');
 
     // 9. В начале строки (диалоги)
     result = result.replace(/(^|\n)-\s/gu, '$1— ');
@@ -239,6 +249,15 @@ export class AdvancedTypographyProcessor {
 
     // В самом конце: нормализуем двойные пробелы до одного
     result = result.replace(/ {2,}/g, ' ');
+
+    // 99. Восстанавливаем невидимый разделитель между тегами
+    result = result.replace(/\u200B/g, ' ');
+
+    // После однобуквенных предлогов — неразрывный пробел (улучшенная регулярка)
+    result = result.replace(/(^|[\s.,;:!?"'«»()\[\]{}-])([вксуояи])\s+([А-Яа-яA-Za-z])/gmu, '$1$2\u00A0$3');
+
+    // Между числом и словом — неразрывный пробел
+    result = result.replace(/(\d)\s+([А-Яа-яA-Za-z])/g, '$1\u00A0$2');
 
     return result;
   }
@@ -415,3 +434,26 @@ export class AdvancedTypographyProcessor {
 
 // Экспорт для обратной совместимости
 export const TypographyProcessor = AdvancedTypographyProcessor;
+
+export function typographText(text: string): string {
+  return AdvancedTypographyProcessor.process(text);
+}
+
+function typographHtml(html: string): string {
+  const $ = cheerio.load(html);
+  $('body, body *').contents().each(function (this: any) {
+    // Если это текст внутри пустого <p> — не трогаем
+    if (this.type === 'text') {
+      const parent = this.parent as any;
+      if (
+        parent &&
+        parent.tagName === 'p' &&
+        (!this.data || this.data.replace(/\s|\u00A0|&nbsp;/g, '') === '')
+      ) {
+        return;
+      }
+      this.data = typographText(this.data || '');
+    }
+  });
+  return $.html();
+}

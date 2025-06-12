@@ -1,215 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { AdvancedTypographyProcessor } from '@/lib/typography';
 import mammoth from 'mammoth';
+import * as cheerio from 'cheerio';
+import { typographText } from '@/lib/typography';
+import { Document, Packer, Paragraph, TextRun } from 'docx';
+import path from 'path';
 import PizZip from 'pizzip';
+import { load as loadXml } from 'cheerio';
 
-export async function POST(request: NextRequest) {
-  try {
-    console.log('=== НАЧАЛО ОБРАБОТКИ ФАЙЛА ===');
-    
-    const formData = await request.formData();
-    const file = formData.get('file') as File;
-
-    if (!file) {
-      console.error('ОШИБКА: Файл не найден в запросе');
-      return NextResponse.json({ error: 'Файл не найден' }, { status: 400 });
+function typographHtml(html: string): string {
+  const $ = cheerio.load(html);
+  $('body, body *').contents().each(function () {
+    if (this.type === 'text') {
+      this.data = typographText(this.data || '');
     }
-
-    console.log(`ФАЙЛ: ${file.name}, РАЗМЕР: ${file.size} байт, ТИП: ${file.type}`);
-
-    // Проверка размера файла (максимум 10MB)
-    if (file.size > 10 * 1024 * 1024) {
-      console.error('ОШИБКА: Файл слишком большой');
-      return NextResponse.json({ error: 'Файл слишком большой (максимум 10MB)' }, { status: 400 });
-    }
-
-    let text = '';
-
-    try {
-      const fileName = file.name.toLowerCase();
-      
-      if (fileName.endsWith('.docx')) {
-        console.log('ОБРАБОТКА: Word документ');
-        try {
-          const arrayBuffer = await file.arrayBuffer();
-          const buffer = Buffer.from(arrayBuffer);
-          const zip = new PizZip(buffer);
-          // Обработка основного текста
-          let documentXml = zip.file('word/document.xml')?.asText();
-          if (!documentXml) throw new Error('document.xml не найден');
-          documentXml = processDocxXml(documentXml);
-          // ВАЛИДАЦИЯ: запрещаем неэкранированные &, <, > вне тегов
-          const plainText = documentXml.replace(/<[^>]+>/g, '');
-          if (/[&<>]/.test(plainText)) {
-            const badFragment = plainText.match(/.{0,30}[&<>].{0,30}/g);
-            console.error('ОШИБКА: document.xml содержит неэкранированные спецсимволы! Фрагменты:', badFragment);
-            return new Response('Ошибка: document.xml содержит неэкранированные спецсимволы!', { status: 500 });
-          }
-          console.log('DEBUG: document.xml после обработки:', documentXml.slice(0, 2000));
-          zip.file('word/document.xml', documentXml);
-          // Обработка сносок, если есть
-          if (zip.file('word/footnotes.xml')) {
-            let footnotesXml = zip.file('word/footnotes.xml')?.asText();
-            if (footnotesXml) {
-              footnotesXml = processDocxXml(footnotesXml);
-              console.log('DEBUG: footnotes.xml после обработки:', footnotesXml.slice(0, 1000));
-              zip.file('word/footnotes.xml', footnotesXml);
-            }
-          }
-          const outBuffer = zip.generate({ type: 'nodebuffer' });
-          const originalName = file.name.replace(/\.docx$/i, '');
-          let fileNameTranslit = transliterate(originalName);
-          fileNameTranslit = fileNameTranslit.replace(/[^A-Za-z0-9_-]/g, '_').replace(/[_-]+$/, '');
-          const asciiFileName = fileNameTranslit;
-          const utf8FileName = `${fileNameTranslit}.docx`;
-          console.log('УСПЕХ: Создан выходной файл:', utf8FileName);
-          return new Response(outBuffer, {
-            headers: {
-              'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-              'Content-Disposition': `attachment; filename="${asciiFileName}.docx"; filename*=UTF-8''${encodeURIComponent(utf8FileName)}`,
-              'Content-Length': outBuffer.length.toString(),
-              'Cache-Control': 'no-cache, no-store, must-revalidate',
-              'Pragma': 'no-cache',
-              'Expires': '0',
-            },
-          });
-        } catch (wordError) {
-          console.error('ОШИБКА Word:', wordError);
-          throw new Error(`Ошибка обработки Word документа: ${wordError instanceof Error ? wordError.message : 'Неизвестная ошибка'}`);
-        }
-      } else {
-        console.error('ОШИБКА: Неподдерживаемый формат файла');
-        return NextResponse.json({ 
-          error: `Неподдерживаемый формат файла: ${file.name}. Поддерживаются только .docx` 
-        }, { status: 400 });
-      }
-
-    } catch (extractError) {
-      console.error('ОШИБКА ИЗВЛЕЧЕНИЯ:', extractError);
-      return NextResponse.json({ 
-        error: `Ошибка чтения файла: ${extractError instanceof Error ? extractError.message : 'Неизвестная ошибка'}` 
-      }, { status: 500 });
-    }
-
-    // Проверяем результат
-    if (!text || text.trim().length === 0) {
-      console.error('ОШИБКА: Пустой текст после извлечения');
-      return NextResponse.json({ 
-        error: 'Файл пуст или не содержит читаемого текста' 
-      }, { status: 400 });
-    }
-
-    console.log('ОБРАБОТКА: Применение типографских правил');
-    
-    try {
-      // Применяем типографские правила
-      const processedText = AdvancedTypographyProcessor.process(text);
-      const stats = AdvancedTypographyProcessor.getProcessingStats(text, processedText);
-      
-      console.log('УСПЕХ: Типографские правила применены');
-      console.log('СТАТИСТИКА:', JSON.stringify(stats));
-
-      // Создаем файл для скачивания
-      const textWithBOM = '\uFEFF' + processedText;
-      const outputBuffer = Buffer.from(textWithBOM, 'utf-8');
-      
-      const originalName = file.name.replace(/\.(docx?|txt)$/i, '');
-      let fileNameTranslit = transliterate(originalName);
-      fileNameTranslit = fileNameTranslit.replace(/[^A-Za-z0-9_-]/g, '_').replace(/[_-]+$/, '');
-      const asciiFileName = fileNameTranslit;
-      const utf8FileName = `${fileNameTranslit}_obrabotano.txt`;
-      
-      console.log('УСПЕХ: Создан выходной файл:', utf8FileName);
-      
-      return new Response(outputBuffer, {
-        headers: {
-          'Content-Type': 'text/plain; charset=utf-8',
-          'Content-Disposition': `attachment; filename="${asciiFileName}_obrabotano.txt"; filename*=UTF-8''${encodeURIComponent(utf8FileName)}`,
-          'Content-Length': outputBuffer.length.toString(),
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
-          'Expires': '0',
-          'X-Typography-Stats': JSON.stringify(stats),
-        },
-      });
-
-    } catch (processingError: unknown) {
-      console.error('ОШИБКА ОБРАБОТКИ:', processingError);
-      let errorMessage: string;
-      if (processingError instanceof Error) {
-        errorMessage = (processingError as Error).message;
-      } else if (typeof processingError === 'string') {
-        errorMessage = processingError as string;
-      } else {
-        errorMessage = 'Неизвестная ошибка';
-      }
-      return NextResponse.json({ 
-        error: `Ошибка типографской обработки: ${errorMessage}` 
-      }, { status: 500 });
-    }
-
-  } catch (generalError) {
-    console.error('ОБЩАЯ ОШИБКА:', generalError);
-    return NextResponse.json({
-      error: `Внутренняя ошибка сервера: ${generalError instanceof Error ? generalError.message : 'Неизвестная ошибка'}`
-    }, { status: 500 });
-  }
+  });
+  return $.html();
 }
 
-/**
- * Безопасная конвертация HTML в текст
- */
-function convertHtmlToText(html: string): string {
-  try {
-    let text = html;
-    
-    // Заменяем HTML теги на переносы строк и символы
-    text = text.replace(/<\/p>/gi, '\n\n');
-    text = text.replace(/<br\s*\/?>/gi, '\n');
-    text = text.replace(/<\/div>/gi, '\n');
-    text = text.replace(/<\/h[1-6]>/gi, '\n\n');
-    text = text.replace(/<\/li>/gi, '\n');
-    
-    // Убираем HTML теги, но сохраняем содержимое
-    text = text.replace(/<[^>]*>/g, '');
-    
-    // Декодируем HTML сущности
-    const entities = {
-      '&nbsp;': ' ',
-      '&amp;': '&',
-      '&lt;': '<',
-      '&gt;': '>',
-      '&quot;': '"',
-      '&#39;': "'",
-      '&rsquo;': "'",
-      '&lsquo;': "'",
-      '&rdquo;': '"',
-      '&ldquo;': '"',
-      '&mdash;': '—',
-      '&ndash;': '–',
-      '&hellip;': '…',
-      '&copy;': '©',
-      '&reg;': '®',
-      '&trade;': '™'
-    };
-    
-    for (const [entity, replacement] of Object.entries(entities)) {
-      text = text.replace(new RegExp(entity, 'g'), replacement);
-    }
-    
-    // Убираем лишние пробелы и переносы
-    text = text.replace(/\n{3,}/g, '\n\n');
-    text = text.replace(/[ \t]{2,}/g, ' ');
-    
-    return text.trim();
-    
-  } catch (error) {
-    console.error('Ошибка конвертации HTML:', error);
-    return html; // Возвращаем исходный HTML в случае ошибки
-  }
-}
-
-// Функция транслитерации кириллицы в латиницу
 function transliterate(str: string): string {
   const map: Record<string, string> = {
     А: 'A', Б: 'B', В: 'V', Г: 'G', Д: 'D', Е: 'E', Ё: 'E', Ж: 'Zh', З: 'Z', И: 'I', Й: 'Y', К: 'K', Л: 'L', М: 'M', Н: 'N', О: 'O', П: 'P', Р: 'R', С: 'S', Т: 'T', У: 'U', Ф: 'F', Х: 'Kh', Ц: 'Ts', Ч: 'Ch', Ш: 'Sh', Щ: 'Shch', Ъ: '', Ы: 'Y', Ь: '', Э: 'E', Ю: 'Yu', Я: 'Ya',
@@ -219,99 +26,256 @@ function transliterate(str: string): string {
   return str.split('').map(char => map[char] !== undefined ? map[char] : char).join('');
 }
 
-// Функция экранирования спецсимволов XML
-function escapeXml(unsafe: string): string {
-  // Сначала декодируем уже экранированные сущности (если есть)
-  let text = unsafe
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'");
-  // Затем экранируем заново
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
-}
-
-// Вспомогательная функция: разбить текст на слова и пробелы
-function splitByWordsAndSpaces(text: string): string[] {
-  return text.match(/\S+|\s+/g) || [];
-}
-
-// Функция агрессивной очистки пробелов и спецсимволов
-function cleanTypographySpaces(text: string): string {
-  return text
-    .replace(/\s{2,}/g, ' ')
-    .replace(/^\s+|\s+$/gm, '')
-    .replace(/\s+([.,!?;:»])/g, '$1')
-    .replace(/([«(])\s+/g, '$1')
-    .replace(/\u00A0\s+/g, '\u00A0')
-    .replace(/\s+\u00A0/g, '\u00A0')
-    .replace(/[\u200B-\u200D\uFEFF]/g, '') // невидимые символы
-    .replace(/^\s+|\s+$/g, '');
-}
-
-// Вспомогательная функция: обработка XML Word (document.xml, footnotes.xml)
-function processDocxXml(xml: string): string {
-  // Для каждого абзаца <w:p>...
-  return xml.replace(/(<w:p[\s\S]*?<\/w:p>)/g, (pBlock) => {
-    const tMatches = [...pBlock.matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)];
-    if (tMatches.length === 0) return pBlock;
-    const originalTexts = tMatches.map(m => m[1]);
-    const fullText = originalTexts.join('');
-    // Применяем типографику и очистку только к склеенному тексту
-    const processedRaw = AdvancedTypographyProcessor.process(fullText);
-    let processed = cleanTypographySpaces(processedRaw);
-    processed = escapeXml(processed);
-
-    // Если длина совпадает — простое разбиение
-    if (fullText.length === processed.length) {
-      let cursor = 0;
-      const processedChunks = originalTexts.map(orig => {
-        const chunk = processed.slice(cursor, cursor + orig.length);
-        cursor += orig.length;
-        return chunk; // не применяем очистку!
-      });
-      let i = 0;
-      return pBlock.replace(/<w:t[^>]*>[\s\S]*?<\/w:t>/g, (tTag) => tTag.replace(/>.*?</, '>' + processedChunks[i++] + '<'));
-    }
-    // Иначе — разбиваем по словам и пробелам
-    const origChunks = splitByWordsAndSpaces(fullText);
-    const procChunks = splitByWordsAndSpaces(processed);
-    if (origChunks.length === procChunks.length) {
-      // Распределяем по <w:t>
-      let i = 0, j = 0;
-      const newTexts = [];
-      for (const orig of originalTexts) {
-        let chunk = '';
-        let len = orig.length;
-        while (len > 0 && j < procChunks.length) {
-          const part = procChunks[j];
-          if (part.length <= len) {
-            chunk += part;
-            len -= part.length;
-            j++;
-          } else {
-            chunk += part.slice(0, len);
-            procChunks[j] = part.slice(len);
-            len = 0;
-          }
-        }
-        newTexts.push(chunk); // не применяем очистку!
+function parseRuns($: cheerio.CheerioAPI, $elem: cheerio.Cheerio, parentStyle: any = {}): TextRun[] {
+  const runs: TextRun[] = [];
+  $elem.contents().each((_, node) => {
+    let style = { ...parentStyle };
+    if (node.type === 'tag') {
+      if (node.name === 'b' || node.name === 'strong') style.bold = true;
+      if (node.name === 'i' || node.name === 'em') style.italics = true;
+      if (node.name === 'u') style.underline = {};
+      if (node.name === 'span' && node.attribs && node.attribs.style) {
+        const s = node.attribs.style;
+        const colorMatch = s.match(/color:\s*([^;]+)/i);
+        if (colorMatch) style.color = colorMatch[1].replace('#', '');
+        const sizeMatch = s.match(/font-size:\s*(\d+)px/i);
+        if (sizeMatch) style.size = Number(sizeMatch[1]) * 2;
       }
-      let k = 0;
-      return pBlock.replace(/<w:t[^>]*>[\s\S]*?<\/w:t>/g, (tTag) => tTag.replace(/>.*?</, '>' + newTexts[k++] + '<'));
-    } else {
-      // Не удалось — оставляем исходный текст
-      console.warn('[processDocxXml] Не удалось безопасно разбить обработанный текст по <w:t>', {
-        origLen: fullText.length, procLen: processed.length, originalTexts, processed
-      });
-      return pBlock;
+      runs.push(...parseRuns($, $(node), style));
+    } else if (node.type === 'text') {
+      if (node.data && node.data.trim()) {
+        runs.push(new TextRun({ text: node.data, ...style }));
+      }
     }
   });
+  return runs;
+}
+
+function isEmptyParagraph(paragraph: any): boolean {
+  // Вариант с root (docx >= 7)
+  if (Array.isArray(paragraph.root) && paragraph.root.length > 1) {
+    const textRun = paragraph.root[1];
+    if (textRun && Array.isArray(textRun.root) && textRun.root.length > 1) {
+      const textValue = textRun.root[1];
+      return textValue === ' ' || textValue === '\u00A0' || textValue === '&nbsp;';
+    }
+  }
+  // Старые варианты (на всякий случай)
+  if (paragraph.children && paragraph.children.length === 1) {
+    const t = paragraph.children[0];
+    const text = t.text || (t.root && t.root.text);
+    return text === '\u00A0' || text === '&nbsp;' || text === ' ';
+  }
+  if (paragraph.options?.text !== undefined) {
+    return paragraph.options.text === '\u00A0' || paragraph.options.text === '&nbsp;' || paragraph.options.text === ' ';
+  }
+  return false;
+}
+
+function hasSignificantContent(paragraph: any): boolean {
+  // Проверяем root (docx >= 7)
+  if (Array.isArray(paragraph.root) && paragraph.root.length > 1) {
+    const textRun = paragraph.root[1];
+    if (textRun && Array.isArray(textRun.root) && textRun.root.length > 1) {
+      const textValue = textRun.root[1];
+      // Считаем значимым только если есть буква или цифра
+      return /[A-Za-zА-Яа-яЁё0-9]/.test(textValue);
+    }
+  }
+  // Старые варианты (на всякий случай)
+  if (paragraph.children && paragraph.children.length === 1) {
+    const t = paragraph.children[0];
+    const text = t.text || (t.root && t.root.text);
+    return /[A-Za-zА-Яа-яЁё0-9]/.test(text);
+  }
+  if (paragraph.options?.text !== undefined) {
+    return /[A-Za-zА-Яа-яЁё0-9]/.test(paragraph.options.text);
+  }
+  return false;
+}
+
+function isTrulyEmptyParagraph(paragraph: any): boolean {
+  // Проверяем root (docx >= 7)
+  if (Array.isArray(paragraph.root) && paragraph.root.length > 1) {
+    const textRun = paragraph.root[1];
+    if (textRun && Array.isArray(textRun.root) && textRun.root.length > 1) {
+      const textValue = textRun.root[1];
+      return textValue === ' ' || textValue === '\u00A0' || textValue === '&nbsp;';
+    }
+  }
+  // Старые варианты (на всякий случай)
+  if (paragraph.children && paragraph.children.length === 1) {
+    const t = paragraph.children[0];
+    const text = t.text || (t.root && t.root.text);
+    return text === '\u00A0' || text === '&nbsp;' || text === ' ';
+  }
+  if (paragraph.options?.text !== undefined) {
+    return paragraph.options.text === '\u00A0' || paragraph.options.text === '&nbsp;' || paragraph.options.text === ' ';
+  }
+  return false;
+}
+
+function trimTrailingEmptyParagraphs(paragraphs: any[]): any[] {
+  let lastNonEmpty = paragraphs.length - 1;
+  for (; lastNonEmpty >= 0; lastNonEmpty--) {
+    if (!isTrulyEmptyParagraph(paragraphs[lastNonEmpty])) {
+      break;
+    }
+  }
+  return paragraphs.slice(0, lastNonEmpty + 1);
+}
+
+function htmlToDocxParagraphs(html: string): Paragraph[] {
+  const $ = cheerio.load(html);
+  const paragraphs: Paragraph[] = [];
+  let prevWasBlock = false;
+  $('body').contents().each((_, elem) => {
+    if (elem.type === 'tag') {
+      if (elem.tagName === 'p' || elem.tagName === 'div') {
+        const innerHtml = $(elem).html()?.replace(/\s|&nbsp;|<br\s*\/?>(?=\s*<\/p>)/gi, '').trim();
+        if (!innerHtml) {
+          paragraphs.push(new Paragraph('\u00A0'));
+          prevWasBlock = true;
+        } else {
+          const runs = parseRuns($, $(elem));
+          if (runs.length) {
+            paragraphs.push(new Paragraph({ children: runs }));
+            prevWasBlock = true;
+          } else {
+            paragraphs.push(new Paragraph('\u00A0'));
+            prevWasBlock = true;
+          }
+        }
+      } else if (elem.tagName === 'br') {
+        paragraphs.push(new Paragraph('\u00A0'));
+        prevWasBlock = true;
+      } else if (elem.tagName === 'ul' || elem.tagName === 'ol') {
+        $(elem).find('li').each((_, li) => {
+          const runs = parseRuns($, $(li));
+          if (runs.length) {
+            paragraphs.push(new Paragraph({ children: runs, bullet: elem.tagName === 'ul' }));
+            prevWasBlock = true;
+          }
+        });
+      } else if (elem.tagName === 'h1' || elem.tagName === 'h2' || elem.tagName === 'h3') {
+        const runs = parseRuns($, $(elem));
+        if (runs.length) {
+          paragraphs.push(new Paragraph({ children: runs, heading: elem.tagName.toUpperCase() as any }));
+          prevWasBlock = true;
+        }
+      }
+    } else if (elem.type === 'text') {
+      if (elem.data && elem.data.replace(/\s+/g, '') === '') {
+        if (prevWasBlock) {
+          paragraphs.push(new Paragraph('\u00A0'));
+          prevWasBlock = false;
+        }
+      }
+    }
+  });
+  // Удаляем только хвост из truly empty абзацев
+  return trimTrailingEmptyParagraphs(paragraphs);
+}
+
+// Функция автозаполнения пустых абзацев DOCX
+function fillEmptyParagraphsInDocx(buffer: Buffer): Buffer {
+  const zip = new PizZip(buffer);
+  let xml = zip.file('word/document.xml')?.asText();
+  if (!xml) return buffer;
+  const $ = loadXml(xml, { xmlMode: true });
+  $('*').each((_, p) => {
+    if (p.tagName === 'w:p') {
+      const hasText = $(p).find('w\\:t, t').filter((_, t) => $(t).text().trim() !== '').length > 0;
+      if (!hasText) {
+        const run = $('<w:r><w:t xml:space="preserve">&#160;</w:t></w:r>');
+        $(p).append(run);
+      }
+    }
+  });
+  const newXml = $.xml();
+  zip.file('word/document.xml', newXml);
+  return zip.generate({ type: 'nodebuffer' });
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const formData = await request.formData();
+    const file = formData.get('file') as File;
+    const output = (formData.get('output') as string)?.toLowerCase() || 'docx';
+    if (!file) {
+      return NextResponse.json({ error: 'Файл не найден' }, { status: 400 });
+    }
+    if (!file.name.toLowerCase().endsWith('.docx')) {
+      return NextResponse.json({ error: 'Поддерживаются только файлы DOCX.' }, { status: 400 });
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      return NextResponse.json({ error: 'Файл слишком большой (максимум 10MB)' }, { status: 400 });
+    }
+    const arrayBuffer = await file.arrayBuffer();
+    let buffer = Buffer.from(arrayBuffer);
+    buffer = fillEmptyParagraphsInDocx(buffer);
+    let html: string;
+    try {
+      const { value } = await mammoth.convertToHtml({ buffer });
+      html = value;
+    } catch (err) {
+      return NextResponse.json({ error: 'Ошибка конвертации DOCX в HTML: ' + String(err) }, { status: 500 });
+    }
+    let processedHtml: string;
+    try {
+      processedHtml = typographHtml(html);
+    } catch (err) {
+      return NextResponse.json({ error: 'Ошибка типографики по HTML: ' + String(err) }, { status: 500 });
+    }
+    const originalName = file.name.replace(/\.docx$/i, '');
+    let fileNameTranslit = transliterate(originalName);
+    fileNameTranslit = fileNameTranslit.replace(/[^A-Za-z0-9_-]/g, '_').replace(/[_-]+$/, '');
+    if (output === 'html') {
+      const encoder = new TextEncoder();
+      const htmlBuffer = encoder.encode(processedHtml);
+      const asciiFileName = fileNameTranslit;
+      const utf8FileName = `${fileNameTranslit}.html`;
+      return new NextResponse(htmlBuffer, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Content-Disposition': `attachment; filename="${asciiFileName}.html"; filename*=UTF-8''${encodeURIComponent(utf8FileName)}`,
+          'Content-Length': htmlBuffer.length.toString(),
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0',
+        },
+      });
+    }
+    // DOCX через docx
+    let docxBuffer: Buffer;
+    try {
+      const doc = new Document({
+        sections: [
+          {
+            properties: {},
+            children: htmlToDocxParagraphs(processedHtml),
+          },
+        ],
+      });
+      docxBuffer = await Packer.toBuffer(doc);
+    } catch (err) {
+      return NextResponse.json({ error: 'Ошибка генерации DOCX: ' + String(err) }, { status: 500 });
+    }
+    const asciiFileName = fileNameTranslit;
+    const utf8FileName = `${fileNameTranslit}.docx`;
+    return new NextResponse(docxBuffer, {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'Content-Disposition': `attachment; filename="${asciiFileName}.docx"; filename*=UTF-8''${encodeURIComponent(utf8FileName)}`,
+        'Content-Length': docxBuffer.length.toString(),
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+      },
+    });
+  } catch (error) {
+    return NextResponse.json({ error: String(error) }, { status: 500 });
+  }
 }
