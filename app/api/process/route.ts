@@ -184,7 +184,7 @@ function fillEmptyParagraphsInDocx(buffer: Buffer): Buffer {
   if (!xml) return buffer;
   const $ = loadXml(xml, { xmlMode: true });
   $('*').each((_, p) => {
-    if (p.tagName === 'w:p') {
+    if (p.type === 'tag' && p.name === 'w:p') {
       const hasText = $(p).find('w\\:t, t').filter((_, t) => $(t).text().trim() !== '').length > 0;
       if (!hasText) {
         const run = $('<w:r><w:t xml:space="preserve">&#160;</w:t></w:r>');
