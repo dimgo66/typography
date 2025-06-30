@@ -41,32 +41,36 @@ export class AdvancedTypographyProcessor {
   static isPoetry(text: string): boolean {
     const lines = text.split('\n').filter(line => line.trim().length > 0);
     
+    if (lines.length < 3) {
+      return false; // Не считаем поэзией, если меньше 3 строк
+    }
+
     // Признаки стихотворения:
     let poetryScore = 0;
     
     // 1. Короткие строки (меньше 60 символов в среднем)
     const avgLineLength = lines.reduce((sum, line) => sum + line.trim().length, 0) / lines.length;
-    if (avgLineLength < 60) poetryScore += 2;
+    if (avgLineLength < 70) poetryScore += 2;
     
     // 2. Много переносов строк
     const lineBreaks = (text.match(/\n/g) || []).length;
     const wordCount = text.split(/\s+/).length;
-    if (lineBreaks / wordCount > 0.1) poetryScore += 2;
+    if (wordCount > 0 && lineBreaks / wordCount > 0.15) poetryScore += 2;
     
     // 3. Табуляции в начале строк (лесенка)
     const indentedLines = lines.filter(line => line.match(/^\s{2,}/) || line.startsWith('\t')).length;
-    if (indentedLines / lines.length > 0.3) poetryScore += 3;
+    if (lines.length > 0 && indentedLines / lines.length > 0.3) poetryScore += 3;
     
     // 4. Заглавные буквы в начале строк
     const capitalizedLines = lines.filter(line => /^[А-ЯЁA-Z]/.test(line.trim())).length;
-    if (capitalizedLines / lines.length > 0.7) poetryScore += 1;
+    if (lines.length > 0 && capitalizedLines / lines.length > 0.7) poetryScore += 1;
     
     // 5. Ритмичность (повторяющаяся длина строк)
     const lineLengths = lines.map(line => line.trim().length);
     const lengthVariance = this.calculateVariance(lineLengths);
-    if (lengthVariance < 100) poetryScore += 1;
+    if (lengthVariance < 120) poetryScore += 1;
     
-    return poetryScore >= 4;
+    return poetryScore >= 5;
   }
 
   /**
@@ -107,13 +111,13 @@ export class AdvancedTypographyProcessor {
   /**
    * Обработка обычного текста
    */
-  static processRegularText(text: string): string {
+  static processRegularText(text: string, isFirst: boolean = false): string {
     let result = text;
 
     // Основные правила типографики
-    result = this.applyBasicRules(result);
-    result = this.applyNonBreakingSpaces(result);
     result = this.applyPunctuation(result);
+    result = this.applyBasicRules(result, isFirst);
+    result = this.applyNonBreakingSpaces(result);
     
     // Удаляем все пустые строки в конце текста
     result = result.replace(/(\r?\n)+$/g, '');
@@ -153,7 +157,7 @@ export class AdvancedTypographyProcessor {
   /**
    * Применяет базовые правила типографики
    */
-  private static applyBasicRules(text: string): string {
+  private static applyBasicRules(text: string, isFirst: boolean = false): string {
     let result = text;
 
     // 0. Защита от слипания слов: временно заменяем > < на >\u200B< (невидимый разделитель)
@@ -161,8 +165,12 @@ export class AdvancedTypographyProcessor {
 
     // 1. Множественные пробелы (заменяем любые последовательности пробельных символов, кроме \n, на один пробел)
     result = result.replace(/[ \t\v\f\r]{2,}/g, ' ');
-    // 1a. Убираем пробелы в начале и конце каждой строки (но не трогаем внутренние пробелы между словами)
-    result = result.replace(/^[ \t]+|[ \t]+$/gm, '');
+
+    // 1a. Убираем пробелы в начале и конце каждой строки
+    if (isFirst) {
+      // Для первого фрагмента текста в абзаце убираем начальные пробелы
+      result = result.replace(/^\s+/, '');
+    }
 
     // 1b. Между знаком № и цифрой всегда неразрывный пробел
     result = result.replace(/№\s*(\d+)/g, '№\u00A0$1');
@@ -204,24 +212,8 @@ export class AdvancedTypographyProcessor {
     // 5a. Удаляем пробелы вокруг en dash между числами (2020 - 2021 → 2020–2021)
     result = result.replace(/(\d{1,4})\s*–\s*(\d{1,4})/g, '$1–$2');
 
-    // 6. en dash между словами или с пробелами → em dash с неразрывным пробелом
-    // (\s|^)–(\s) → \u00A0— 
-    result = result.replace(/(\s|^|\n)–(\s)/g, '$1\u00A0— ');
-    // Также: пробел en dash пробел
-    result = result.replace(/\s+–\s+/g, '\u00A0— ');
-
-    // 7. Пробел-длинное тире-пробел и пробел-дефис-пробел → неразрывный пробел—обычный пробел
-    result = result.replace(/\s+(-|—)\s+/g, '\u00A0— ');
-
-    // 8. Между словами (буква-пробел-дефис-пробел-буква)
-    // После тире всегда пробел
-    result = result.replace(/(\p{L})\s*-\s*(\p{L})/gu, '$1 — $2');
-    // После em dash/en dash между словами — всегда пробел, КРОМЕ диапазонов чисел
-    result = result.replace(/—(?!\d)(\S)/g, '— $1');
-    result = result.replace(/–(?!\d)(\S)/g, '– $1');
-
-    // 9. В начале строки (диалоги)
-    result = result.replace(/(^|\n)-\s/gu, '$1— ');
+    // 6. Замена дефисов и тире на длинное тире внутри предложений
+    result = result.replace(/\s(-|–)\s/g, this.NON_BREAKING_SPACE + this.EM_DASH + ' ');
 
     // 10. Возвращаем сокращения, дефисы внутри слов и сложных слов
     result = result
@@ -254,7 +246,7 @@ export class AdvancedTypographyProcessor {
     result = result.replace(/\u200B/g, ' ');
 
     // После однобуквенных предлогов — неразрывный пробел (улучшенная регулярка)
-    result = result.replace(/(^|[\s.,;:!?"'«»()\[\]{}-])([вксуояи])\s+([А-Яа-яA-Za-z])/gmu, '$1$2\u00A0$3');
+    result = result.replace(/(^|[\s.,;:!?"'«»()\[\]{}-])([вксуояи])\s+([А-Яа-яA-Za-z])/gimu, '$1$2\u00A0$3');
 
     // Между числом и словом — неразрывный пробел
     result = result.replace(/(\d)\s+([А-Яа-яA-Za-z])/g, '$1\u00A0$2');
@@ -297,8 +289,12 @@ export class AdvancedTypographyProcessor {
       `$1${this.NON_BREAKING_SPACE}$2`);
     
     // Инициалы с фамилией
-    result = result.replace(/([А-ЯЁ]\.)\s+([А-ЯЁ]\.)\s+([А-ЯЁ][а-яё]+)/g, 
+    // Инициалы с фамилией (сначала два инициала, потом один)
+    // Исправляем инициалы, допускаем отсутствие пробелов между ними
+    result = result.replace(/([А-ЯЁ]\.)\s*([А-ЯЁ]\.)\s*([А-ЯЁ][а-яё]+)/g,
       `$1${this.NON_BREAKING_SPACE}$2${this.NON_BREAKING_SPACE}$3`);
+    result = result.replace(/([А-ЯЁ]\.)\s*([А-ЯЁ][а-яё]+)/g,
+      `$1${this.NON_BREAKING_SPACE}$2`);
 
     return result;
   }
@@ -309,8 +305,9 @@ export class AdvancedTypographyProcessor {
   private static applyPunctuation(text: string): string {
     let result = text;
 
-    // Диалоги
-    result = result.replace(/^\s*-\s*/gm, this.EM_DASH + this.EN_SPACE);
+    // Диалоги (прямая речь в начале строки)
+    // Заменяем дефис на тире в начале строки (прямая речь)
+    result = result.replace(/(^|\n)([ \t]*)-/gm, '$1$2' + this.EM_DASH + ' ');
     
     // Проценты
     result = result.replace(/(\d+)\s*%/g, `$1${this.THIN_SPACE}%`);
@@ -353,13 +350,13 @@ export class AdvancedTypographyProcessor {
   /**
    * Обрабатывает простой текст (для обратной совместимости)
    */
-  static process(text: string): string {
+  static process(text: string, options?: { isFirst?: boolean }): string {
     const isPoetryText = this.isPoetry(text);
     
     if (isPoetryText) {
       return this.processPoetryText(text);
     } else {
-      return this.processRegularText(text);
+      return this.processRegularText(text, options?.isFirst);
     }
   }
 
@@ -435,8 +432,10 @@ export class AdvancedTypographyProcessor {
 // Экспорт для обратной совместимости
 export const TypographyProcessor = AdvancedTypographyProcessor;
 
-export function typographText(text: string): string {
-  return AdvancedTypographyProcessor.process(text);
+export function typographText(text: string, options?: { isFirst?: boolean }): string {
+  const processed = AdvancedTypographyProcessor.process(text, options);
+  // Заменяем символ перевода строки на знак абзаца
+  return processed.replace(/\n/g, '¶');
 }
 
 function typographHtml(html: string): string {
